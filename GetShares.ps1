@@ -13,18 +13,17 @@ function Search-Directory {
         [string]$path
     )
 
-    # Get all items in the current directory without stopping on errors
-    $items = Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
-
-    foreach ($item in $items) {
-        if ($item.Extension -eq ".lnk") {
+    # Process items in the current directory one by one, including directories but ignoring errors
+    Get-ChildItem -Path $path -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        # Check if the item is a file and has a .lnk extension
+        if (!$_.PSIsContainer -and $_.Extension -eq ".lnk") {
             try {
                 # Extract the target path of the shortcut
-                $lnk = $shell.CreateShortcut($item.FullName)
+                $lnk = $shell.CreateShortcut($_.FullName)
                 $targetPath = $lnk.TargetPath
 
                 # Check if the target path looks like a UNC path
-                if ($targetPath.StartsWith("\\\")) {
+                if ($targetPath.StartsWith("\\")) {
                     # Extract the FQDN from the UNC path
                     $fqdn = ($targetPath -split "\\")[2]
 
@@ -34,7 +33,7 @@ function Search-Directory {
                     }
                 }
             } catch {
-                # Ignore errors related to processing the shortcut and continue
+                # Optionally log errors
             }
         }
     }
