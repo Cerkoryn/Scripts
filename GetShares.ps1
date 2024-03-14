@@ -10,11 +10,8 @@ function Search-Directory {
     param (
         [string]$path
     )
-    # Collect all .lnk files first
-    $lnkFiles = Get-ChildItem -Path $path -Recurse -Filter *.lnk -ErrorAction SilentlyContinue
-
     # Process .lnk files in parallel and collect results
-    $results = $lnkFiles | ForEach-Object -Parallel {
+    Get-ChildItem -Path $path -Recurse -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object -Parallel {
         $shell = New-Object -ComObject WScript.Shell
         $uniqueShare = $null
         try {
@@ -25,7 +22,12 @@ function Search-Directory {
                 $fqdn = $splitPath[2]
                 $firstFolder = $splitPath[3]
                 $uniqueShare = "\\$fqdn\$firstFolder"
-                Write-Output $uniqueShare
+                # Check if we have read access to the share
+                if (Test-Path -Path $uniqueShare -PathType Container) {
+                    $uniqueShare
+                } else {
+                    $null
+                }
             }
         } catch {
             Write-Error "Error processing file $($_.FullName): $_"
@@ -33,26 +35,12 @@ function Search-Directory {
             [System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null
         }
         return $uniqueShare
-    } -ThrottleLimit 10
-
-    $mutex = [System.Threading.Mutex]::new($false, "HashSetLock")
-
-    # Add the results to the HashSet and output file outside the parallel block
-    foreach ($share in $results) {
-        if ($null -ne $share) {
-            # Synchronize access to the shared HashSet
-            try {
-                $mutex.WaitOne()
-                if ($uniqueServers.Add($share)) {
-                    Add-Content -Value $share -Path $outputFile
-                    Write-Host $share
-                }
-            } finally {
-                $mutex.ReleaseMutex()
-            }
+    } -ThrottleLimit 10 | Where-Object { $_ -ne $null } | ForEach-Object {
+        if ($uniqueServers.Add($_)) {
+            Add-Content -Value $_ -Path $outputFile
+            Write-Host $_
         }
     }
-    $mutex.Dispose()
 }
 
 
