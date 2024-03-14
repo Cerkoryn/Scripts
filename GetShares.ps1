@@ -5,45 +5,56 @@ $outputFile = "path_to_output_file.txt"           # Replace with the actual file
 # Create an empty HashSet to store unique FQDNs
 $uniqueServers = New-Object System.Collections.Generic.HashSet[string]
 
-# Define the Shell.Application COM object to extract shortcut target paths
-$shell = New-Object -ComObject WScript.Shell
-
 # Recursive function to find and process .lnk files
 function Search-Directory {
     param (
         [string]$path
     )
-    # Process items in the current directory one by one, including directories but ignoring errors
-    Get-ChildItem -Path $path -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        # Check if the item is a file and has a .lnk extension
-        if (!$_.PSIsContainer -and $_.Extension -eq ".lnk") {
+    # Collect all .lnk files first
+    $lnkFiles = Get-ChildItem -Path $path -Recurse -Filter *.lnk -ErrorAction SilentlyContinue
+
+    # Process .lnk files in parallel and collect results
+    $results = $lnkFiles | ForEach-Object -Parallel {
+        $shell = New-Object -ComObject WScript.Shell
+        $uniqueShare = $null
+        try {
+            $lnk = $shell.CreateShortcut($_.FullName)
+            $targetPath = $lnk.TargetPath
+            if ($targetPath.StartsWith("\\")) {
+                $splitPath = $targetPath -split "\\"
+                $fqdn = $splitPath[2]
+                $firstFolder = $splitPath[3]
+                $uniqueShare = "\\$fqdn\$firstFolder"
+                Write-Output $uniqueShare
+            }
+        } catch {
+            Write-Error "Error processing file $($_.FullName): $_"
+        } finally {
+            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null
+        }
+        return $uniqueShare
+    } -ThrottleLimit 10
+
+    $mutex = [System.Threading.Mutex]::new($false, "HashSetLock")
+
+    # Add the results to the HashSet and output file outside the parallel block
+    foreach ($share in $results) {
+        if ($null -ne $share) {
+            # Synchronize access to the shared HashSet
             try {
-                # Extract the target path of the shortcut
-                $lnk = $shell.CreateShortcut($_.FullName)
-                $targetPath = $lnk.TargetPath
-                # Check if the target path looks like a UNC path
-                if ($targetPath.StartsWith("\\")) {
-                    # Extract the FQDN and the first folder in the share from the UNC path
-                    $splitPath = $targetPath -split "\\"
-                    $fqdn = $splitPath[2]
-                    $firstFolder = $splitPath[3]
-                    $uniqueShare = "\\$fqdn\$firstFolder"
-                    # Check if we have read access to the unique network/file share
-                    $hasReadAccess = Test-Path -Path $uniqueShare -PathType Container
-                    # Check if the unique network/file share is new and if we have read access, then print it
-                    if ($uniqueServers.Add($uniqueShare) -and $hasReadAccess) {
-                        Add-Content -Value $uniqueShare -Path $outputFile
-                        Write-Host $uniqueShare
-                        # Recursively search the new unique share
-                        Search-Directory -path $uniqueShare
-                    }
+                $mutex.WaitOne()
+                if ($uniqueServers.Add($share)) {
+                    Add-Content -Value $share -Path $outputFile
+                    Write-Host $share
                 }
-            } catch {
-                # Optionally log errors
+            } finally {
+                $mutex.ReleaseMutex()
             }
         }
     }
+    $mutex.Dispose()
 }
+
 
 # Initialize a queue with the root directories
 $queue = New-Object System.Collections.Generic.Queue[string]
@@ -56,6 +67,3 @@ while ($queue.Count -gt 0) {
     $currentPath = $queue.Dequeue()
     Search-Directory -path $currentPath
 }
-
-# Cleanup COM object
-[System.Runtime.Interopservices.Marshal]::ReleaseComObject($shell) | Out-Null
