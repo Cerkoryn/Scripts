@@ -1,3 +1,22 @@
+param (
+    [string]$username
+)
+
+# Define the list of allowed usernames
+$allowedUsernames = @("user1", "rwiley", "user3")
+
+# Check if the supplied username is null or empty
+if ([string]::IsNullOrEmpty($username)) {
+    Write-Output "Username cannot be null or empty. Exiting."
+    exit
+}
+
+# Check if the supplied username is in the list of allowed usernames
+if ($allowedUsernames -notcontains $username) {
+    Write-Output "Username not valid. Exiting."
+    exit
+}
+
 class Card {
     [bool]$isNew
     [bool]$isLearning
@@ -95,7 +114,6 @@ function prompt_card($card) {
 }
 
 $deckName = "module"
-$username = "rwiley"
 $deck = load_deck -deckName $deckName -username $username
 foreach ($card in $deck) {
     $currentDate = Get-Date
